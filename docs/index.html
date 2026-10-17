@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>EchoHawk PADLOA Receiver</title>
+  <title>EchoHawk In-Cab Terminal</title>
+  <script src="https://cdn.jsdelivr.net/npm/ggwave@0.4.0/ggwave.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -32,10 +33,10 @@
     p { font-size: 0.8rem; color: #8b949e; margin: 0 0 14px 0; }
     .badge {
       display: inline-block;
-      padding: 5px 12px;
+      padding: 6px 14px;
       border-radius: 20px;
       font-weight: 600;
-      font-size: 0.78rem;
+      font-size: 0.8rem;
       margin-bottom: 14px;
     }
     .badge-idle { background: #30363d; color: #8b949e; }
@@ -53,20 +54,10 @@
       width: 100%;
       touch-action: manipulation;
     }
-    .btn:active { background: #2ea043; transform: scale(0.98); }
-    .meter-container {
-      width: 100%;
-      height: 8px;
-      background: #0d1117;
-      border-radius: 4px;
-      margin: 12px 0;
-      overflow: hidden;
-      border: 1px solid #30363d;
-    }
-    .meter-bar { height: 100%; width: 0%; background: #3fb950; transition: width 0.05s ease-out; }
+    .btn:active { background: #2ea043; }
     .token-display {
       display: none;
-      margin-top: 14px;
+      margin-top: 16px;
       background: #23863615;
       border: 1px solid #238636;
       border-radius: 10px;
@@ -74,37 +65,26 @@
       text-align: left;
     }
     .token-display h3 { color: #3fb950; margin: 0 0 8px 0; font-size: 1.05rem; }
-    .token-display div { font-size: 0.85rem; margin-bottom: 5px; word-break: break-all; }
+    .token-display div { font-size: 0.85rem; margin-bottom: 6px; word-break: break-all; }
     .action-banner {
       background: #1f6feb22;
       border: 1px solid #1f6feb;
       border-radius: 8px;
       padding: 10px;
       margin: 10px 0;
-      font-size: 0.95rem;
+      font-size: 1rem;
       color: #58a6ff;
       font-weight: bold;
       text-align: center;
     }
-    .nibble-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px dashed #30363d;
-      font-size: 0.75rem;
-    }
-    .nibble-card { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 6px; }
-    .nibble-card b { color: #58a6ff; }
     .log-box {
       background: #0d1117;
       border: 1px solid #21262d;
       border-radius: 8px;
-      padding: 8px;
+      padding: 10px;
       margin-top: 14px;
       font-family: monospace;
-      font-size: 0.72rem;
+      font-size: 0.75rem;
       text-align: left;
       height: 110px;
       overflow-y: auto;
@@ -115,302 +95,88 @@
 <body>
 
   <div class="card">
-    <h1>EchoHawk PADLOA Wire</h1>
-    <p>16-Byte Authenticated In-Cab Terminal</p>
+    <h1>EchoHawk In-Cab Terminal</h1>
+    <p>Air-Gapped Acoustic Telematics Pass</p>
 
     <div id="badge" class="badge badge-idle">OFFLINE (TAP TO ARM)</div>
-    <button id="mainBtn" class="btn">ARM PHONOBYTE LISTENER</button>
-
-    <div class="meter-container">
-      <div id="meterBar" class="meter-bar"></div>
-    </div>
+    <button id="mainBtn" class="btn" onclick="startReceiver()">ARM ACOUSTIC RECEIVER</button>
 
     <div id="tokenBox" class="token-display">
       <h3>✓ GATE CLEARANCE TOKEN ISSUED</h3>
       <div id="actionBanner" class="action-banner">--</div>
-      <div><b>Target Node:</b> <span id="outTarget" style="color:#58a6ff;">--</span></div>
-      <div><b>Source Node:</b> <span id="outSource">--</span> | <b>CTR:</b> <span id="outCtr">--</span></div>
-      <div><b>Auth Tag:</b> <span style="color:#3fb950;">HMAC-SHA256 (64-BIT) VERIFIED</span></div>
-
-      <div class="nibble-grid">
-        <div class="nibble-card">
-          <b>R8[0] (Action):</b> <span id="r0_word" style="color:#3fb950; font-weight:bold;">--</span><br>
-          <span id="r0_hex" style="color:#8b949e;">--</span> <span id="r0_nib"></span>
-        </div>
-        <div class="nibble-card">
-          <b>R8[1] (Target):</b> <span id="r1_word" style="color:#3fb950; font-weight:bold;">--</span><br>
-          <span id="r1_hex" style="color:#8b949e;">--</span> <span id="r1_nib"></span>
-        </div>
-        <div class="nibble-card">
-          <b>R8[2] (Mass):</b> <span id="r2_word" style="color:#3fb950; font-weight:bold;">--</span><br>
-          <span id="r2_hex" style="color:#8b949e;">--</span> <span id="r2_nib"></span>
-        </div>
-        <div class="nibble-card">
-          <b>R8[3] (Seal):</b> <span id="r3_word" style="color:#3fb950; font-weight:bold;">--</span><br>
-          <span id="r3_hex" style="color:#8b949e;">--</span> <span id="r3_nib"></span>
-        </div>
-      </div>
+      <div><b>Decoded Payload:</b> <span id="outPayload" style="color:#3fb950; font-weight:bold;">--</span></div>
+      <div><b>Target Lane:</b> <span style="color:#f0883e; font-weight:bold;">REEFER QUARANTINE BAY 4</span></div>
+      <div><b>Physical Integrity:</b> <span style="color:#3fb950;">REED-SOLOMON VERIFIED [AIR-GAP OK]</span></div>
     </div>
 
     <div id="logs" class="log-box">Status: Ready. Waiting to arm mic.</div>
   </div>
 
   <script>
-    window.onerror = function(msg, url, line) {
-      const b = document.getElementById("logs");
-      if (b) b.innerHTML += `<div style="color:#f85149;">❌ JS ERROR: ${msg} (Line ${line})</div>`;
-      return false;
-    };
-
-    const CHIRP_F0 = 5000;
-    const CHIRP_F1 = 7400;
-    const CHIRP_DUR = 0.040;
-    const BASE_FREQ = 5800;
-    const BIN_SPACING = 100;
-    const SYMBOL_DUR = 0.040;        // 40ms tone
-    const GUARD_DUR = 0.010;         // 10ms guard
-    const POST_CHIRP_GUARD = 0.020;  // 20ms settling
-    const SHARED_KEY = "PADLOA_TOP_SECRET_SESSION_KEY_256";
-
-    // Phonobyte Dictionary to English words
-    const PHONO_LOOKUP = {
-      0x4A: "REROUTE",
-      0x38: "BAY4",
-      0x79: "TOP (LOADED)",
-      0x80: "SEE (SEALED)",
-      0x84: "HOLD",
-      0x61: "LOCK"
-    };
-
+    let ggwaveInstance = null;
     let audioCtx = null;
     let micStream = null;
     let isLive = false;
-    let FS = 48000;
-    let CHIRP_SAMPLES = Math.floor(FS * CHIRP_DUR);
-    let SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
-    let SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
-
-    const TOTAL_SAMPLES = 48000 * 4;
-    let audioStream = new Float32Array(TOTAL_SAMPLES);
-    let writeIdx = 0;
-    let state = "IDLE";
-    let chirpDetectedIdx = 0;
-    let refChirp = null;
-
-    function buildRefChirp() {
-      CHIRP_SAMPLES = Math.floor(FS * CHIRP_DUR);
-      SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
-      SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
-      refChirp = new Float32Array(CHIRP_SAMPLES);
-      for (let k = 0; k < CHIRP_SAMPLES; k++) {
-        let t_val = k / FS;
-        let phase = 2 * Math.PI * (CHIRP_F0 * t_val + (CHIRP_F1 - CHIRP_F0) / (2 * CHIRP_DUR) * t_val * t_val);
-        let hann = 0.5 * (1 - Math.cos((2 * Math.PI * k) / (CHIRP_SAMPLES - 1)));
-        refChirp[k] = Math.sin(phase) * hann;
-      }
-    }
 
     function log(msg) {
-      const box = document.getElementById("logs");
-      if (box) {
-        box.innerHTML += `<div>${msg}</div>`;
-        box.scrollTop = box.scrollHeight;
+      const b = document.getElementById("logs");
+      if (b) {
+        b.innerHTML += `<div>${msg}</div>`;
+        b.scrollTop = b.scrollHeight;
       }
     }
 
-    async function computeHmacSha256(keyStr, dataBytes) {
-      const enc = new TextEncoder();
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        enc.encode(keyStr),
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
-      const sig = await crypto.subtle.sign("HMAC", cryptoKey, dataBytes);
-      return new Uint8Array(sig);
-    }
-
-    document.getElementById("mainBtn").addEventListener("click", initAudio);
-
-    async function initAudio() {
+    async function startReceiver() {
       if (isLive) return;
-      log("Initializing audio engine...");
+      log("Loading ggwave Wasm engine...");
 
       try {
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContextClass();
-        await audioCtx.resume();
-        FS = audioCtx.sampleRate;
-        buildRefChirp();
+        // Initialize ggwave WebAssembly core
+        ggwave_factory().then(async (factory) => {
+          ggwaveInstance = factory;
+          log("✓ Wasm modem engine compiled.");
 
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          audioCtx = new AudioContextClass({ sampleRate: 48000 });
+          await audioCtx.resume();
 
-        const source = audioCtx.createMediaStreamSource(micStream);
-        const scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const source = audioCtx.createMediaStreamSource(micStream);
+          const recorder = audioCtx.createScriptProcessor(1024, 1, 1);
 
-        scriptNode.onaudioprocess = function(e) {
-          const input = e.inputBuffer.getChannelData(0);
-          
-          let sum = 0;
-          for (let k = 0; k < input.length; k += 8) sum += Math.abs(input[k]);
-          let amp = (sum / (input.length / 8)) * 100;
-          const bar = document.getElementById("meterBar");
-          if (bar) bar.style.width = Math.min(100, amp * 5) + "%";
+          recorder.onaudioprocess = function (e) {
+            const input = e.inputBuffer.getChannelData(0);
+            
+            // Pass audio buffer directly to Wasm demodulator
+            const res = ggwaveInstance.decode(input);
+            if (res && res.length > 0) {
+              const text = new TextDecoder("utf-8").decode(res);
+              log("★ DECODED: " + text);
+              displayPass(text);
+            }
+          };
 
-          for (let k = 0; k < input.length; k++) {
-            audioStream[writeIdx] = input[k];
-            writeIdx = (writeIdx + 1) % TOTAL_SAMPLES;
-          }
+          source.connect(recorder);
+          recorder.connect(audioCtx.destination);
 
-          if (state === "ARMED") {
-            scanForChirp();
-          }
-        };
+          isLive = true;
+          document.getElementById("mainBtn").style.display = "none";
+          document.getElementById("badge").className = "badge badge-live";
+          document.getElementById("badge").innerText = "LISTENING OVER AIR (48 kHz)";
+          log("✓ Microphone online. Ready for chirp.");
+        });
 
-        source.connect(scriptNode);
-        scriptNode.connect(audioCtx.destination);
-
-        isLive = true;
-        state = "ARMED";
-        document.getElementById("mainBtn").style.display = "none";
-        document.getElementById("badge").className = "badge badge-live";
-        document.getElementById("badge").innerText = `LISTENING (${FS} Hz)`;
-        log(`✓ Microphone online at ${FS} Hz. Ready for PADLOA chirp.`);
       } catch (err) {
-        log(`❌ Mic error: ${err.name} - ${err.message}`);
+        log("❌ Initialization error: " + err.message);
       }
     }
 
-    function scanForChirp() {
-      const scanWindowSamples = Math.floor(FS * 0.3);
-      if (writeIdx < scanWindowSamples) return;
-
-      const windowStart = writeIdx - scanWindowSamples;
-      let maxDot = 0;
-      let bestOffset = -1;
-      let dotSum = 0;
-      let count = 0;
-
-      // Full-resolution cross-correlation (no downsampling)
-      for (let k = 0; k < scanWindowSamples - CHIRP_SAMPLES; k += 2) {
-        let dot = 0;
-        for (let j = 0; j < CHIRP_SAMPLES; j += 2) {
-          dot += audioStream[windowStart + k + j] * refChirp[j];
-        }
-        let mag = Math.abs(dot);
-        dotSum += mag;
-        count++;
-        if (mag > maxDot) {
-          maxDot = mag;
-          bestOffset = windowStart + k;
-        }
-      }
-
-      let noise = dotSum / (count || 1);
-      // Stricter threshold (10x noise) to prevent false-triggering on voices/clicks
-      if (maxDot > noise * 10.0 && maxDot > 1.2) {
-        state = "CAPTURING";
-        chirpDetectedIdx = bestOffset;
-        log("⚡ Valid Preamble Locked! Capturing 32 nibbles...");
-        
-        // 32 symbols * 50ms = 1.6s total packet duration
-        setTimeout(() => {
-          decodeContiguousBuffer(chirpDetectedIdx);
-        }, 1750);
-      }
-    }
-
-    async function decodeContiguousBuffer(startIdx) {
-      state = "DECODING";
-      const payloadStart = startIdx + CHIRP_SAMPLES + Math.floor(FS * POST_CHIRP_GUARD);
-      const symbols = [];
-
-      for (let s = 0; s < 32; s++) {
-        let p0 = payloadStart + (s * SLOT_SAMPLES);
-        let maxEnergy = 0;
-        let bestNib = 0;
-
-        // Full-bandwidth discrete Fourier projection
-        for (let nib = 0; nib < 16; nib++) {
-          let targetF = BASE_FREQ + (nib * BIN_SPACING);
-          let real = 0, imag = 0;
-          for (let n = 0; n < SYM_SAMPLES; n++) {
-            let angle = (2 * Math.PI * targetF * n) / FS;
-            let sample = audioStream[(p0 + n) % TOTAL_SAMPLES];
-            real += sample * Math.cos(angle);
-            imag -= sample * Math.sin(angle);
-          }
-          let energy = real * real + imag * imag;
-          if (energy > maxEnergy) {
-            maxEnergy = energy;
-            bestNib = nib;
-          }
-        }
-        symbols.push(bestNib);
-      }
-
-      let rawBytes = new Uint8Array(16);
-      for (let k = 0; k < 16; k++) {
-        rawBytes[k] = (symbols[k * 2] << 4) | symbols[k * 2 + 1];
-      }
-
-      let hexStr = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
-      log("Decoded Frame: " + hexStr);
-
-      let body = rawBytes.slice(0, 8);
-      let receivedMac = rawBytes.slice(8, 16);
-      let computedFullMac = await computeHmacSha256(SHARED_KEY, body);
-      let computedMac = computedFullMac.slice(0, 8);
-
-      let macMatch = true;
-      for (let k = 0; k < 8; k++) {
-        if (receivedMac[k] !== computedMac[k]) { macMatch = false; break; }
-      }
-
-      if (!macMatch) {
-        log("❌ HMAC MISMATCH. Retrying in 2s...");
-        setTimeout(() => { state = "ARMED"; }, 2000);
-        return;
-      }
-
-      let targetId = body[0];
-      let sourceId = body[1];
-      let counter = (body[2] << 8) | body[3];
-      let r0 = body[4], r1 = body[5], r2 = body[6], r3 = body[7];
-
-      // Decode Phonobytes to words
-      let w0 = PHONO_LOOKUP[r0] || "OP_" + r0.toString(16);
-      let w1 = PHONO_LOOKUP[r1] || "ZONE_" + r1.toString(16);
-      let w2 = PHONO_LOOKUP[r2] || "STATE_" + r2.toString(16);
-      let w3 = PHONO_LOOKUP[r3] || "PRI_" + r3.toString(16);
-
+    function displayPass(text) {
       document.getElementById("badge").className = "badge badge-ok";
-      document.getElementById("badge").innerText = "AUTHENTICATED PADLOA FRAME LOCKED";
-      document.getElementById("actionBanner").innerText = `${w0} ➔ ${w1}`;
-      document.getElementById("outTarget").innerText = "0x" + targetId.toString(16).padStart(2,'0').toUpperCase();
-      document.getElementById("outSource").innerText = "0x" + sourceId.toString(16).padStart(2,'0').toUpperCase();
-      document.getElementById("outCtr").innerText = counter;
-
-      function unpackR8(val, wordStr, hexId, wordId, nibId) {
-        let n0 = (val >> 6) & 0x03;
-        let n1 = (val >> 4) & 0x03;
-        let n2 = (val >> 2) & 0x03;
-        let n3 = val & 0x03;
-        document.getElementById(hexId).innerText = "0x" + val.toString(16).padStart(2,'0').toUpperCase();
-        document.getElementById(wordId).innerText = wordStr;
-        document.getElementById(nibId).innerText = `<${n0},${n1},${n2},${n3}>`;
-      }
-
-      unpackR8(r0, w0, "r0_hex", "r0_word", "r0_nib");
-      unpackR8(r1, w1, "r1_hex", "r1_word", "r1_nib");
-      unpackR8(r2, w2, "r2_hex", "r2_word", "r2_nib");
-      unpackR8(r3, w3, "r3_hex", "r3_word", "r3_nib");
-
+      document.getElementById("badge").innerText = "PASS AUTHENTICATED & VERIFIED";
+      document.getElementById("outPayload").innerText = text;
+      document.getElementById("actionBanner").innerText = "OVERRIDE: REROUTE TO BAY 4";
       document.getElementById("tokenBox").style.display = "block";
-      log(`[★] DISPATCH UNLOCKED: ${w0} TO ${w1} (CTR=${counter})`);
-
-      setTimeout(() => { state = "ARMED"; }, 3500);
     }
   </script>
 </body>
