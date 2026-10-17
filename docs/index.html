@@ -28,7 +28,7 @@
       max-width: 420px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
-    h1 { font-size: 1.25rem; color: #58a6ff; margin: 0 0 4px 0; }
+    h1 { font-size: 1.3rem; color: #58a6ff; margin: 0 0 4px 0; }
     p { font-size: 0.8rem; color: #8b949e; margin: 0 0 14px 0; }
     .badge {
       display: inline-block;
@@ -69,12 +69,23 @@
       margin-top: 14px;
       background: #23863615;
       border: 1px solid #238636;
-      border-radius: 8px;
-      padding: 12px;
+      border-radius: 10px;
+      padding: 16px;
       text-align: left;
     }
-    .token-display h3 { color: #3fb950; margin: 0 0 6px 0; font-size: 0.95rem; }
-    .token-display div { font-size: 0.8rem; margin-bottom: 4px; word-break: break-all; }
+    .token-display h3 { color: #3fb950; margin: 0 0 8px 0; font-size: 1.05rem; }
+    .token-display div { font-size: 0.85rem; margin-bottom: 5px; word-break: break-all; }
+    .action-banner {
+      background: #1f6feb22;
+      border: 1px solid #1f6feb;
+      border-radius: 8px;
+      padding: 10px;
+      margin: 10px 0;
+      font-size: 0.95rem;
+      color: #58a6ff;
+      font-weight: bold;
+      text-align: center;
+    }
     .nibble-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -105,7 +116,7 @@
 
   <div class="card">
     <h1>EchoHawk PADLOA Wire</h1>
-    <p>16-Byte Authenticated Phonobyte Demodulator</p>
+    <p>16-Byte Authenticated In-Cab Terminal</p>
 
     <div id="badge" class="badge badge-idle">OFFLINE (TAP TO ARM)</div>
     <button id="mainBtn" class="btn">ARM PHONOBYTE LISTENER</button>
@@ -115,28 +126,28 @@
     </div>
 
     <div id="tokenBox" class="token-display">
-      <h3>✓ AUTHENTICATED PADLOA FRAME LOCKED</h3>
+      <h3>✓ GATE CLEARANCE TOKEN ISSUED</h3>
+      <div id="actionBanner" class="action-banner">--</div>
       <div><b>Target Node:</b> <span id="outTarget" style="color:#58a6ff;">--</span></div>
       <div><b>Source Node:</b> <span id="outSource">--</span> | <b>CTR:</b> <span id="outCtr">--</span></div>
-      <div><b>Raw Frame:</b> <span id="outHex" style="font-family:monospace; color:#8b949e; font-size:0.75rem;">--</span></div>
       <div><b>Auth Tag:</b> <span style="color:#3fb950;">HMAC-SHA256 (64-BIT) VERIFIED</span></div>
 
       <div class="nibble-grid">
         <div class="nibble-card">
-          <b>R8[0]:</b> <span id="r0_hex">--</span> (<span id="r0_word" style="color:#3fb950;">--</span>)<br>
-          <span id="r0_nib" style="color:#8b949e;">&lt;N0,N1,N2,N3&gt;</span>
+          <b>R8[0] (Action):</b> <span id="r0_word" style="color:#3fb950; font-weight:bold;">--</span><br>
+          <span id="r0_hex" style="color:#8b949e;">--</span> <span id="r0_nib"></span>
         </div>
         <div class="nibble-card">
-          <b>R8[1]:</b> <span id="r1_hex">--</span> (<span id="r1_word" style="color:#3fb950;">--</span>)<br>
-          <span id="r1_nib" style="color:#8b949e;">&lt;N0,N1,N2,N3&gt;</span>
+          <b>R8[1] (Target):</b> <span id="r1_word" style="color:#3fb950; font-weight:bold;">--</span><br>
+          <span id="r1_hex" style="color:#8b949e;">--</span> <span id="r1_nib"></span>
         </div>
         <div class="nibble-card">
-          <b>R8[2]:</b> <span id="r2_hex">--</span><br>
-          <span id="r2_nib" style="color:#8b949e;">&lt;N0,N1,N2,N3&gt;</span>
+          <b>R8[2] (Mass):</b> <span id="r2_word" style="color:#3fb950; font-weight:bold;">--</span><br>
+          <span id="r2_hex" style="color:#8b949e;">--</span> <span id="r2_nib"></span>
         </div>
         <div class="nibble-card">
-          <b>R8[3]:</b> <span id="r3_hex">--</span><br>
-          <span id="r3_nib" style="color:#8b949e;">&lt;N0,N1,N2,N3&gt;</span>
+          <b>R8[3] (Seal):</b> <span id="r3_word" style="color:#3fb950; font-weight:bold;">--</span><br>
+          <span id="r3_hex" style="color:#8b949e;">--</span> <span id="r3_nib"></span>
         </div>
       </div>
     </div>
@@ -145,7 +156,6 @@
   </div>
 
   <script>
-    // Universal Error Trap: Displays any script crash directly in the log box
     window.onerror = function(msg, url, line) {
       const b = document.getElementById("logs");
       if (b) b.innerHTML += `<div style="color:#f85149;">❌ JS ERROR: ${msg} (Line ${line})</div>`;
@@ -157,10 +167,20 @@
     const CHIRP_DUR = 0.040;
     const BASE_FREQ = 5800;
     const BIN_SPACING = 100;
-    const SYMBOL_DUR = 0.035;
-    const GUARD_DUR = 0.005;
-    const POST_CHIRP_GUARD = 0.015;
+    const SYMBOL_DUR = 0.040;        // 40ms tone
+    const GUARD_DUR = 0.010;         // 10ms guard
+    const POST_CHIRP_GUARD = 0.020;  // 20ms settling
     const SHARED_KEY = "PADLOA_TOP_SECRET_SESSION_KEY_256";
+
+    // Phonobyte Dictionary to English words
+    const PHONO_LOOKUP = {
+      0x4A: "REROUTE",
+      0x38: "BAY4",
+      0x79: "TOP (LOADED)",
+      0x80: "SEE (SEALED)",
+      0x84: "HOLD",
+      0x61: "LOCK"
+    };
 
     let audioCtx = null;
     let micStream = null;
@@ -182,14 +202,11 @@
       SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
       SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
       refChirp = new Float32Array(CHIRP_SAMPLES);
-      const w_len = Math.floor(CHIRP_SAMPLES * 0.15);
       for (let k = 0; k < CHIRP_SAMPLES; k++) {
         let t_val = k / FS;
         let phase = 2 * Math.PI * (CHIRP_F0 * t_val + (CHIRP_F1 - CHIRP_F0) / (2 * CHIRP_DUR) * t_val * t_val);
-        let w = 1.0;
-        if (k < w_len) w = 0.5 * (1 - Math.cos(Math.PI * k / w_len));
-        if (k > CHIRP_SAMPLES - w_len) w = 0.5 * (1 - Math.cos(Math.PI * (CHIRP_SAMPLES - k) / w_len));
-        refChirp[k] = Math.sin(phase) * w;
+        let hann = 0.5 * (1 - Math.cos((2 * Math.PI * k) / (CHIRP_SAMPLES - 1)));
+        refChirp[k] = Math.sin(phase) * hann;
       }
     }
 
@@ -201,7 +218,6 @@
       }
     }
 
-    // Standard Lightweight Web Cryptography HMAC
     async function computeHmacSha256(keyStr, dataBytes) {
       const enc = new TextEncoder();
       const cryptoKey = await crypto.subtle.importKey(
@@ -215,7 +231,6 @@
       return new Uint8Array(sig);
     }
 
-    // Direct Event Listener Binding (Bypasses inline onclick restrictions)
     document.getElementById("mainBtn").addEventListener("click", initAudio);
 
     async function initAudio() {
@@ -224,17 +239,10 @@
 
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextClass) {
-          throw new Error("Web Audio API not supported in this browser.");
-        }
         audioCtx = new AudioContextClass();
         await audioCtx.resume();
         FS = audioCtx.sampleRate;
         buildRefChirp();
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error("Microphone access unavailable. Ensure HTTPS is used.");
-        }
 
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -268,11 +276,9 @@
         document.getElementById("mainBtn").style.display = "none";
         document.getElementById("badge").className = "badge badge-live";
         document.getElementById("badge").innerText = `LISTENING (${FS} Hz)`;
-        log(`✓ Microphone active at ${FS} Hz. Ready for PADLOA chirp.`);
+        log(`✓ Microphone online at ${FS} Hz. Ready for PADLOA chirp.`);
       } catch (err) {
         log(`❌ Mic error: ${err.name} - ${err.message}`);
-        const badge = document.getElementById("badge");
-        if (badge) badge.innerText = "ARMING FAILED";
       }
     }
 
@@ -286,9 +292,10 @@
       let dotSum = 0;
       let count = 0;
 
-      for (let k = 0; k < scanWindowSamples - CHIRP_SAMPLES; k += 4) {
+      // Full-resolution cross-correlation (no downsampling)
+      for (let k = 0; k < scanWindowSamples - CHIRP_SAMPLES; k += 2) {
         let dot = 0;
-        for (let j = 0; j < CHIRP_SAMPLES; j += 4) {
+        for (let j = 0; j < CHIRP_SAMPLES; j += 2) {
           dot += audioStream[windowStart + k + j] * refChirp[j];
         }
         let mag = Math.abs(dot);
@@ -301,14 +308,16 @@
       }
 
       let noise = dotSum / (count || 1);
-      if (maxDot > noise * 6.5 && maxDot > 0.6) {
+      // Stricter threshold (10x noise) to prevent false-triggering on voices/clicks
+      if (maxDot > noise * 10.0 && maxDot > 1.2) {
         state = "CAPTURING";
         chirpDetectedIdx = bestOffset;
-        log("⚡ Preamble chirp locked! Capturing frame...");
+        log("⚡ Valid Preamble Locked! Capturing 32 nibbles...");
         
+        // 32 symbols * 50ms = 1.6s total packet duration
         setTimeout(() => {
           decodeContiguousBuffer(chirpDetectedIdx);
-        }, 1450);
+        }, 1750);
       }
     }
 
@@ -322,10 +331,11 @@
         let maxEnergy = 0;
         let bestNib = 0;
 
+        // Full-bandwidth discrete Fourier projection
         for (let nib = 0; nib < 16; nib++) {
           let targetF = BASE_FREQ + (nib * BIN_SPACING);
           let real = 0, imag = 0;
-          for (let n = 0; n < SYM_SAMPLES; n += 4) {
+          for (let n = 0; n < SYM_SAMPLES; n++) {
             let angle = (2 * Math.PI * targetF * n) / FS;
             let sample = audioStream[(p0 + n) % TOTAL_SAMPLES];
             real += sample * Math.cos(angle);
@@ -346,11 +356,10 @@
       }
 
       let hexStr = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
-      log("Decoded 16B: " + hexStr);
+      log("Decoded Frame: " + hexStr);
 
       let body = rawBytes.slice(0, 8);
       let receivedMac = rawBytes.slice(8, 16);
-      
       let computedFullMac = await computeHmacSha256(SHARED_KEY, body);
       let computedMac = computedFullMac.slice(0, 8);
 
@@ -360,8 +369,8 @@
       }
 
       if (!macMatch) {
-        log("❌ HMAC MISMATCH. Retrying...");
-        state = "ARMED";
+        log("❌ HMAC MISMATCH. Retrying in 2s...");
+        setTimeout(() => { state = "ARMED"; }, 2000);
         return;
       }
 
@@ -370,36 +379,38 @@
       let counter = (body[2] << 8) | body[3];
       let r0 = body[4], r1 = body[5], r2 = body[6], r3 = body[7];
 
+      // Decode Phonobytes to words
+      let w0 = PHONO_LOOKUP[r0] || "OP_" + r0.toString(16);
+      let w1 = PHONO_LOOKUP[r1] || "ZONE_" + r1.toString(16);
+      let w2 = PHONO_LOOKUP[r2] || "STATE_" + r2.toString(16);
+      let w3 = PHONO_LOOKUP[r3] || "PRI_" + r3.toString(16);
+
       document.getElementById("badge").className = "badge badge-ok";
       document.getElementById("badge").innerText = "AUTHENTICATED PADLOA FRAME LOCKED";
+      document.getElementById("actionBanner").innerText = `${w0} ➔ ${w1}`;
       document.getElementById("outTarget").innerText = "0x" + targetId.toString(16).padStart(2,'0').toUpperCase();
       document.getElementById("outSource").innerText = "0x" + sourceId.toString(16).padStart(2,'0').toUpperCase();
       document.getElementById("outCtr").innerText = counter;
-      document.getElementById("outHex").innerText = hexStr;
 
-      function unpackR8(val, hexId, wordId, nibId) {
+      function unpackR8(val, wordStr, hexId, wordId, nibId) {
         let n0 = (val >> 6) & 0x03;
         let n1 = (val >> 4) & 0x03;
         let n2 = (val >> 2) & 0x03;
         let n3 = val & 0x03;
         document.getElementById(hexId).innerText = "0x" + val.toString(16).padStart(2,'0').toUpperCase();
-        if (nibId) document.getElementById(nibId).innerText = `<${n0},${n1},${n2},${n3}>`;
-        if (wordId) {
-          if (val === 0x79) document.getElementById(wordId).innerText = "TOP";
-          else if (val === 0x80) document.getElementById(wordId).innerText = "SEE";
-          else document.getElementById(wordId).innerText = "R8";
-        }
+        document.getElementById(wordId).innerText = wordStr;
+        document.getElementById(nibId).innerText = `<${n0},${n1},${n2},${n3}>`;
       }
 
-      unpackR8(r0, "r0_hex", "r0_word", "r0_nib");
-      unpackR8(r1, "r1_hex", "r1_word", "r1_nib");
-      unpackR8(r2, "r2_hex", null, "r2_nib");
-      unpackR8(r3, "r3_hex", null, "r3_nib");
+      unpackR8(r0, w0, "r0_hex", "r0_word", "r0_nib");
+      unpackR8(r1, w1, "r1_hex", "r1_word", "r1_nib");
+      unpackR8(r2, w2, "r2_hex", "r2_word", "r2_nib");
+      unpackR8(r3, w3, "r3_hex", "r3_word", "r3_nib");
 
       document.getElementById("tokenBox").style.display = "block";
-      log(`[★] DISPATCH PASS UNLOCKED! CTR=${counter}`);
+      log(`[★] DISPATCH UNLOCKED: ${w0} TO ${w1} (CTR=${counter})`);
 
-      setTimeout(() => { state = "ARMED"; }, 3000);
+      setTimeout(() => { state = "ARMED"; }, 3500);
     }
   </script>
 </body>
