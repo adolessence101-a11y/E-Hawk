@@ -93,7 +93,7 @@
       font-family: monospace;
       font-size: 0.72rem;
       text-align: left;
-      height: 100px;
+      height: 110px;
       overflow-y: auto;
       color: #8b949e;
     }
@@ -143,7 +143,6 @@
   </div>
 
   <script>
-    // --- PADLOA Physical Parameters (Matches padloa_tx.py exactly) ---
     const FS = 48000;
     const CHIRP_F0 = 5000;
     const CHIRP_F1 = 7400;
@@ -163,8 +162,13 @@
     let audioCtx = null;
     let micStream = null;
     let isLive = false;
-    let ringBuffer = new Float32Array(FS * 2);
-    let lastDecodeTime = 0;
+    
+    // Large linear recording buffer to prevent ring buffer overwrite during decode
+    const TOTAL_SAMPLES = FS * 4; // 4 seconds recording window
+    let audioStream = new Float32Array(TOTAL_SAMPLES);
+    let writeIdx = 0;
+    let state = "IDLE"; // IDLE -> ARMED -> CAPTURING -> DECODING
+    let chirpDetectedIdx = 0;
 
     // Precalculate reference chirp
     const refChirp = new Float32Array(CHIRP_SAMPLES);
@@ -184,7 +188,7 @@
       box.scrollTop = box.scrollHeight;
     }
 
-    // --- Pure JavaScript SHA-256 and HMAC Engine ---
+    // Pure JS SHA-256 and HMAC Engine
     function sha256(bytes) {
       function rrot(x, n) { return (x >>> n) | (x << (32 - n)); }
       let K = [
@@ -274,103 +278,116 @@
 
         scriptNode.onaudioprocess = (e) => {
           const input = e.inputBuffer.getChannelData(0);
-          ringBuffer.copyWithin(0, input.length);
-          ringBuffer.set(input, ringBuffer.length - input.length);
-
+          
+          // VU Meter calculation
           let sum = 0;
           for (let i = 0; i < input.length; i += 8) sum += Math.abs(input[i]);
           let amp = (sum / (input.length / 8)) * 100;
           document.getElementById("meterBar").style.width = Math.min(100, amp * 5) + "%";
 
-          checkPreamble();
+          // Linear append to avoid ring overwrites
+          for (let i = 0; i < input.length; i++) {
+            audioStream[writeIdx] = input[i];
+            writeIdx = (writeIdx + 1) % TOTAL_SAMPLES;
+          }
+
+          if (state === "ARMED") {
+            scanForChirp();
+          }
         };
 
         source.connect(scriptNode);
         scriptNode.connect(audioCtx.destination);
 
         isLive = true;
+        state = "ARMED";
         document.getElementById("mainBtn").style.display = "none";
         document.getElementById("badge").className = "badge badge-live";
         document.getElementById("badge").innerText = "LISTENING OVER AIR (48 kHz)";
-        log("✓ Microphone online. Listening for chirp...");
+        log("✓ Mic active. Listening for 5-7.4 kHz chirp...");
       } catch (err) {
         log("❌ Mic error: " + err.message);
       }
     }
 
-    function checkPreamble() {
-      const now = Date.now();
-      if (now - lastDecodeTime < 1500) return;
+    function scanForChirp() {
+      // Look back over the last 300ms of contiguous audio
+      const scanWindowSamples = Math.floor(FS * 0.3);
+      if (writeIdx < scanWindowSamples) return;
 
-      const searchLen = Math.floor(FS * 0.4);
-      const startOffset = ringBuffer.length - searchLen;
-      let maxCorr = 0;
-      let peakIdx = -1;
-      let corrSum = 0;
+      const windowStart = writeIdx - scanWindowSamples;
+      let maxDot = 0;
+      let bestOffset = -1;
+      let dotSum = 0;
       let count = 0;
 
-      for (let i = 0; i <= searchLen - CHIRP_SAMPLES; i += 2) {
+      for (let i = 0; i < scanWindowSamples - CHIRP_SAMPLES; i += 4) {
         let dot = 0;
         for (let j = 0; j < CHIRP_SAMPLES; j += 4) {
-          dot += ringBuffer[startOffset + i + j] * refChirp[j];
+          dot += audioStream[windowStart + i + j] * refChirp[j];
         }
         let mag = Math.abs(dot);
-        corrSum += mag;
+        dotSum += mag;
         count++;
-        if (mag > maxCorr) {
-          maxCorr = mag;
-          peakIdx = startOffset + i;
+        if (mag > maxDot) {
+          maxDot = mag;
+          bestOffset = windowStart + i;
         }
       }
 
-      let avg = corrSum / (count || 1);
-      if (maxCorr > avg * 7.0 && maxCorr > 0.8) {
-        lastDecodeTime = now;
-        log("⚡ Preamble locked! Extracting 32 nibbles...");
-        setTimeout(() => { decode16ByteFrame(peakIdx); }, 1300);
+      let noise = dotSum / (count || 1);
+      if (maxDot > noise * 6.5 && maxDot > 0.6) {
+        state = "CAPTURING";
+        chirpDetectedIdx = bestOffset;
+        log("⚡ Preamble locked! Capturing 32 nibbles...");
+        
+        // Exactly 32 symbols * 40ms = 1.28 seconds of payload audio
+        // Wait 1.4 seconds, then freeze buffer and decode!
+        setTimeout(() => {
+          decodeContiguousBuffer(chirpDetectedIdx);
+        }, 1450);
       }
     }
 
-    function decode16ByteFrame(chirpStartIdx) {
-      const payloadStart = chirpStartIdx + CHIRP_SAMPLES + Math.floor(FS * POST_CHIRP_GUARD);
+    function decodeContiguousBuffer(startIdx) {
+      state = "DECODING";
+      const payloadStart = startIdx + CHIRP_SAMPLES + Math.floor(FS * POST_CHIRP_GUARD);
       const symbols = [];
 
       for (let s = 0; s < 32; s++) {
         let p0 = payloadStart + (s * SLOT_SAMPLES);
-        let p1 = p0 + SYM_SAMPLES;
-        if (p1 > ringBuffer.length) return;
-
         let maxEnergy = 0;
-        let bestNibble = 0;
+        let bestNib = 0;
 
         for (let nib = 0; nib < 16; nib++) {
           let targetF = BASE_FREQ + (nib * BIN_SPACING);
           let real = 0, imag = 0;
           for (let n = 0; n < SYM_SAMPLES; n += 4) {
             let angle = (2 * Math.PI * targetF * n) / FS;
-            let sample = ringBuffer[p0 + n];
+            // Safe wrapped access into linear buffer
+            let sample = audioStream[(p0 + n) % TOTAL_SAMPLES];
             real += sample * Math.cos(angle);
             imag -= sample * Math.sin(angle);
           }
           let energy = real * real + imag * imag;
           if (energy > maxEnergy) {
             maxEnergy = energy;
-            bestNibble = nib;
+            bestNib = nib;
           }
         }
-        symbols.push(bestNibble);
+        symbols.push(bestNib);
       }
 
-      // Reconstruct exactly 16 bytes
+      // Reconstruct 16 bytes
       let rawBytes = new Uint8Array(16);
       for (let i = 0; i < 16; i++) {
         rawBytes[i] = (symbols[i * 2] << 4) | symbols[i * 2 + 1];
       }
 
-      let hexStr = Array.from(rawBytes).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-      log("Raw 16B: " + hexStr);
+      let hexStr = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
+      log("Decoded 16B: " + hexStr);
 
-      // Verify HMAC-SHA256 (First 8 bytes are Body; Last 8 bytes are MAC)
+      // Verify HMAC-SHA256
       let body = rawBytes.slice(0, 8);
       let receivedMac = rawBytes.slice(8, 16);
       let computedMac = hmacSha256(SHARED_KEY, body).slice(0, 8);
@@ -381,18 +398,19 @@
       }
 
       if (!macMatch) {
-        log("❌ HMAC MISMATCH: Corrupted symbol or invalid key.");
+        log("❌ HMAC MISMATCH. Retrying...");
+        state = "ARMED";
         return;
       }
 
-      // Unpack Body fields
+      // Unpack Body
       let targetId = body[0];
       let sourceId = body[1];
       let counter = (body[2] << 8) | body[3];
       let r0 = body[4], r1 = body[5], r2 = body[6], r3 = body[7];
 
       document.getElementById("badge").className = "badge badge-ok";
-      document.getElementById("badge").innerText = "PADLOA FRAME AUTHENTICATED";
+      document.getElementById("badge").innerText = "AUTHENTICATED PADLOA FRAME LOCKED";
       document.getElementById("outTarget").innerText = "0x" + targetId.toString(16).padStart(2,'0').toUpperCase();
       document.getElementById("outSource").innerText = "0x" + sourceId.toString(16).padStart(2,'0').toUpperCase();
       document.getElementById("outCtr").innerText = counter;
@@ -417,9 +435,4 @@
       unpackR8(r2, "r2_hex", null, "r2_nib");
       unpackR8(r3, "r3_hex", null, "r3_nib");
 
-      document.getElementById("tokenBox").style.display = "block";
-      log(`[★] AUTH OK! R8=[0x${r0.toString(16)}, 0x${r1.toString(16)}] CTR=${counter}`);
-    }
-  </script>
-</body>
-</html>
+      document.getElementById("token
