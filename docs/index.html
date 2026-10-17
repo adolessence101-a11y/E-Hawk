@@ -141,6 +141,7 @@
       }
     }
 
+    // Official ggwave typed array converter for Wasm boundary
     function convertTypedArray(src, type) {
       const buffer = new ArrayBuffer(src.byteLength);
       new src.constructor(buffer).set(src);
@@ -149,17 +150,17 @@
 
     async function startReceiver() {
       if (isLive) return;
-      log("Initializing ggwave Wasm runtime...");
+      log("Compiling Wasm modem runtime...");
 
       try {
         ggwave_factory().then(async (factory) => {
           ggwave = factory;
 
           const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          audioCtx = new AudioContextClass();
+          audioCtx = new AudioContextClass({ sampleRate: 48000 });
           await audioCtx.resume();
 
-          // Initialize ggwave instance using actual audio hardware sample rate
+          // Initialize instance for both audible and ultrasound protocols
           const parameters = ggwave.getDefaultParameters();
           parameters.sampleRateInp = audioCtx.sampleRate;
           parameters.sampleRateOut = audioCtx.sampleRate;
@@ -169,19 +170,19 @@
 
           micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const source = audioCtx.createMediaStreamSource(micStream);
-          const recorder = audioCtx.createScriptProcessor(2048, 1, 1);
+          const recorder = audioCtx.createScriptProcessor(1024, 1, 1);
 
           recorder.onaudioprocess = function (e) {
             const input = e.inputBuffer.getChannelData(0);
 
-            // VU meter
+            // Live VU meter
             let sum = 0;
             for (let i = 0; i < input.length; i += 8) sum += Math.abs(input[i]);
             let amp = (sum / (input.length / 8)) * 100;
             const bar = document.getElementById("meterBar");
             if (bar) bar.style.width = Math.min(100, amp * 5) + "%";
 
-            // Pass Int8 converted audio to Wasm decode
+            // Pass 1024-sample Int8 block into ggwave decode
             const res = ggwave.decode(ggInstance, convertTypedArray(new Float32Array(input), Int8Array));
             if (res && res.length > 0) {
               const text = new TextDecoder("utf-8").decode(res);
@@ -197,7 +198,7 @@
           document.getElementById("mainBtn").style.display = "none";
           document.getElementById("badge").className = "badge badge-live";
           document.getElementById("badge").innerText = `LISTENING (${audioCtx.sampleRate} Hz)`;
-          log("✓ Microphone online. Ready for data transmission.");
+          log("✓ Listening for inaudible ultrasound / audible tones.");
         });
 
       } catch (err) {
