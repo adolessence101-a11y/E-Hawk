@@ -45,13 +45,15 @@
       background: #238636;
       color: white;
       border: none;
-      padding: 12px 20px;
+      padding: 14px 20px;
       border-radius: 8px;
-      font-size: 0.95rem;
+      font-size: 1rem;
       font-weight: 700;
       cursor: pointer;
       width: 100%;
+      touch-action: manipulation;
     }
+    .btn:active { background: #2ea043; transform: scale(0.98); }
     .meter-container {
       width: 100%;
       height: 8px;
@@ -106,7 +108,7 @@
     <p>16-Byte Authenticated Phonobyte Demodulator</p>
 
     <div id="badge" class="badge badge-idle">OFFLINE (TAP TO ARM)</div>
-    <button id="mainBtn" class="btn" onclick="initAudio()">ARM PHONOBYTE LISTENER</button>
+    <button id="mainBtn" class="btn">ARM PHONOBYTE LISTENER</button>
 
     <div class="meter-container">
       <div id="meterBar" class="meter-bar"></div>
@@ -143,151 +145,113 @@
   </div>
 
   <script>
-    const FS = 48000;
+    // Universal Error Trap: Displays any script crash directly in the log box
+    window.onerror = function(msg, url, line) {
+      const b = document.getElementById("logs");
+      if (b) b.innerHTML += `<div style="color:#f85149;">❌ JS ERROR: ${msg} (Line ${line})</div>`;
+      return false;
+    };
+
     const CHIRP_F0 = 5000;
     const CHIRP_F1 = 7400;
     const CHIRP_DUR = 0.040;
-    const CHIRP_SAMPLES = Math.floor(FS * CHIRP_DUR);
-
     const BASE_FREQ = 5800;
     const BIN_SPACING = 100;
     const SYMBOL_DUR = 0.035;
     const GUARD_DUR = 0.005;
     const POST_CHIRP_GUARD = 0.015;
-
-    const SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
-    const SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
     const SHARED_KEY = "PADLOA_TOP_SECRET_SESSION_KEY_256";
 
     let audioCtx = null;
     let micStream = null;
     let isLive = false;
-    
-    // Large linear recording buffer to prevent ring buffer overwrite during decode
-    const TOTAL_SAMPLES = FS * 4; // 4 seconds recording window
+    let FS = 48000;
+    let CHIRP_SAMPLES = Math.floor(FS * CHIRP_DUR);
+    let SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
+    let SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
+
+    const TOTAL_SAMPLES = 48000 * 4;
     let audioStream = new Float32Array(TOTAL_SAMPLES);
     let writeIdx = 0;
-    let state = "IDLE"; // IDLE -> ARMED -> CAPTURING -> DECODING
+    let state = "IDLE";
     let chirpDetectedIdx = 0;
+    let refChirp = null;
 
-    // Precalculate reference chirp
-    const refChirp = new Float32Array(CHIRP_SAMPLES);
-    for (let i = 0; i < CHIRP_SAMPLES; i++) {
-      let t = i / FS;
-      let phase = 2 * Math.PI * (CHIRP_F0 * t + (CHIRP_F1 - CHIRP_F0) / (2 * CHIRP_DUR) * t * t);
-      let w_len = Math.floor(CHIRP_SAMPLES * 0.15);
-      let w = 1.0;
-      if (i < w_len) w = 0.5 * (1 - Math.cos(Math.PI * i / w_len));
-      if (i > CHIRP_SAMPLES - w_len) w = 0.5 * (1 - Math.cos(Math.PI * (CHIRP_SAMPLES - i) / w_len));
-      refChirp[i] = Math.sin(phase) * w;
+    function buildRefChirp() {
+      CHIRP_SAMPLES = Math.floor(FS * CHIRP_DUR);
+      SYM_SAMPLES = Math.floor(FS * SYMBOL_DUR);
+      SLOT_SAMPLES = Math.floor(FS * (SYMBOL_DUR + GUARD_DUR));
+      refChirp = new Float32Array(CHIRP_SAMPLES);
+      const w_len = Math.floor(CHIRP_SAMPLES * 0.15);
+      for (let k = 0; k < CHIRP_SAMPLES; k++) {
+        let t_val = k / FS;
+        let phase = 2 * Math.PI * (CHIRP_F0 * t_val + (CHIRP_F1 - CHIRP_F0) / (2 * CHIRP_DUR) * t_val * t_val);
+        let w = 1.0;
+        if (k < w_len) w = 0.5 * (1 - Math.cos(Math.PI * k / w_len));
+        if (k > CHIRP_SAMPLES - w_len) w = 0.5 * (1 - Math.cos(Math.PI * (CHIRP_SAMPLES - k) / w_len));
+        refChirp[k] = Math.sin(phase) * w;
+      }
     }
 
     function log(msg) {
       const box = document.getElementById("logs");
-      box.innerHTML += `<div>${msg}</div>`;
-      box.scrollTop = box.scrollHeight;
+      if (box) {
+        box.innerHTML += `<div>${msg}</div>`;
+        box.scrollTop = box.scrollHeight;
+      }
     }
 
-    // Pure JS SHA-256 and HMAC Engine
-    function sha256(bytes) {
-      function rrot(x, n) { return (x >>> n) | (x << (32 - n)); }
-      let K = [
-        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-      ];
-      let H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
-      let l = bytes.length;
-      let totalLen = l * 8;
-      let padLen = ((l + 8) >> 6) + 1;
-      let words = new Uint32Array(padLen * 16);
-      for (let i = 0; i < l; i++) words[i >> 2] |= bytes[i] << (24 - (i & 3) * 8);
-      words[l >> 2] |= 0x80 << (24 - (l & 3) * 8);
-      words[words.length - 1] = totalLen;
-
-      let W = new Uint32Array(64);
-      for (let i = 0; i < words.length; i += 16) {
-        for (let t = 0; t < 16; t++) W[t] = words[i + t];
-        for (let t = 16; t < 64; t++) {
-          let s0 = rrot(W[t - 15], 7) ^ rrot(W[t - 15], 18) ^ (W[t - 15] >>> 3);
-          let s1 = rrot(W[t - 2], 17) ^ rrot(W[t - 2], 19) ^ (W[t - 2] >>> 10);
-          W[t] = (W[t - 16] + s0 + W[t - 7] + s1) | 0;
-        }
-        let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
-        for (let t = 0; t < 64; t++) {
-          let S1 = rrot(e, 6) ^ rrot(e, 11) ^ rrot(e, 25);
-          let ch = (e & f) ^ ((~e) & g);
-          let t1 = (h + S1 + ch + K[t] + W[t]) | 0;
-          let S0 = rrot(a, 2) ^ rrot(a, 13) ^ rrot(a, 22);
-          let maj = (a & b) ^ (a & c) ^ (b & c);
-          let t2 = (S0 + maj) | 0;
-          h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
-        }
-        H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
-        H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
-      }
-      let out = new Uint8Array(32);
-      for (let i = 0; i < 8; i++) {
-        out[i * 4] = (H[i] >>> 24) & 0xff;
-        out[i * 4 + 1] = (H[i] >>> 16) & 0xff;
-        out[i * 4 + 2] = (H[i] >>> 8) & 0xff;
-        out[i * 4 + 3] = H[i] & 0xff;
-      }
-      return out;
+    // Standard Lightweight Web Cryptography HMAC
+    async function computeHmacSha256(keyStr, dataBytes) {
+      const enc = new TextEncoder();
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        enc.encode(keyStr),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const sig = await crypto.subtle.sign("HMAC", cryptoKey, dataBytes);
+      return new Uint8Array(sig);
     }
 
-    function hmacSha256(keyStr, msgBytes) {
-      let key = new TextEncoder().encode(keyStr);
-      let kBlock = new Uint8Array(64);
-      if (key.length > 64) key = sha256(key);
-      kBlock.set(key);
-      let oKey = new Uint8Array(64);
-      let iKey = new Uint8Array(64);
-      for (let i = 0; i < 64; i++) {
-        oKey[i] = kBlock[i] ^ 0x5c;
-        iKey[i] = kBlock[i] ^ 0x36;
-      }
-      let inner = new Uint8Array(64 + msgBytes.length);
-      inner.set(iKey);
-      inner.set(msgBytes, 64);
-      let innerHash = sha256(inner);
-      let outer = new Uint8Array(64 + 32);
-      outer.set(oKey);
-      outer.set(innerHash, 64);
-      return sha256(outer);
-    }
+    // Direct Event Listener Binding (Bypasses inline onclick restrictions)
+    document.getElementById("mainBtn").addEventListener("click", initAudio);
 
     async function initAudio() {
       if (isLive) return;
-      try {
-        log("Arming audio engine...");
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        
-        // 1. Let iOS choose its native hardware sample rate (bypasses 48kHz lock)
-        audioCtx = new AudioContext();
-        await audioCtx.resume();
+      log("Initializing audio engine...");
 
-        // 2. Use simple audio constraint (bypasses OverconstrainedError)
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+          throw new Error("Web Audio API not supported in this browser.");
+        }
+        audioCtx = new AudioContextClass();
+        await audioCtx.resume();
+        FS = audioCtx.sampleRate;
+        buildRefChirp();
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("Microphone access unavailable. Ensure HTTPS is used.");
+        }
+
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
         const source = audioCtx.createMediaStreamSource(micStream);
         const scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
 
-        scriptNode.onaudioprocess = (e) => {
+        scriptNode.onaudioprocess = function(e) {
           const input = e.inputBuffer.getChannelData(0);
           
           let sum = 0;
-          for (let i = 0; i < input.length; i += 8) sum += Math.abs(input[i]);
+          for (let k = 0; k < input.length; k += 8) sum += Math.abs(input[k]);
           let amp = (sum / (input.length / 8)) * 100;
-          document.getElementById("meterBar").style.width = Math.min(100, amp * 5) + "%";
+          const bar = document.getElementById("meterBar");
+          if (bar) bar.style.width = Math.min(100, amp * 5) + "%";
 
-          for (let i = 0; i < input.length; i++) {
-            audioStream[writeIdx] = input[i];
+          for (let k = 0; k < input.length; k++) {
+            audioStream[writeIdx] = input[k];
             writeIdx = (writeIdx + 1) % TOTAL_SAMPLES;
           }
 
@@ -303,16 +267,16 @@
         state = "ARMED";
         document.getElementById("mainBtn").style.display = "none";
         document.getElementById("badge").className = "badge badge-live";
-        document.getElementById("badge").innerText = `LISTENING (${audioCtx.sampleRate} Hz)`;
-        log(`✓ Mic active at ${audioCtx.sampleRate} Hz. Ready for chirp.`);
+        document.getElementById("badge").innerText = `LISTENING (${FS} Hz)`;
+        log(`✓ Microphone active at ${FS} Hz. Ready for PADLOA chirp.`);
       } catch (err) {
-        log("❌ Mic error: " + err.name + " - " + err.message);
-        document.getElementById("badge").innerText = "ARMING FAILED";
+        log(`❌ Mic error: ${err.name} - ${err.message}`);
+        const badge = document.getElementById("badge");
+        if (badge) badge.innerText = "ARMING FAILED";
       }
     }
 
     function scanForChirp() {
-      // Look back over the last 300ms of contiguous audio
       const scanWindowSamples = Math.floor(FS * 0.3);
       if (writeIdx < scanWindowSamples) return;
 
@@ -322,17 +286,17 @@
       let dotSum = 0;
       let count = 0;
 
-      for (let i = 0; i < scanWindowSamples - CHIRP_SAMPLES; i += 4) {
+      for (let k = 0; k < scanWindowSamples - CHIRP_SAMPLES; k += 4) {
         let dot = 0;
         for (let j = 0; j < CHIRP_SAMPLES; j += 4) {
-          dot += audioStream[windowStart + i + j] * refChirp[j];
+          dot += audioStream[windowStart + k + j] * refChirp[j];
         }
         let mag = Math.abs(dot);
         dotSum += mag;
         count++;
         if (mag > maxDot) {
           maxDot = mag;
-          bestOffset = windowStart + i;
+          bestOffset = windowStart + k;
         }
       }
 
@@ -340,17 +304,15 @@
       if (maxDot > noise * 6.5 && maxDot > 0.6) {
         state = "CAPTURING";
         chirpDetectedIdx = bestOffset;
-        log("⚡ Preamble locked! Capturing 32 nibbles...");
+        log("⚡ Preamble chirp locked! Capturing frame...");
         
-        // Exactly 32 symbols * 40ms = 1.28 seconds of payload audio
-        // Wait 1.4 seconds, then freeze buffer and decode!
         setTimeout(() => {
           decodeContiguousBuffer(chirpDetectedIdx);
         }, 1450);
       }
     }
 
-    function decodeContiguousBuffer(startIdx) {
+    async function decodeContiguousBuffer(startIdx) {
       state = "DECODING";
       const payloadStart = startIdx + CHIRP_SAMPLES + Math.floor(FS * POST_CHIRP_GUARD);
       const symbols = [];
@@ -365,7 +327,6 @@
           let real = 0, imag = 0;
           for (let n = 0; n < SYM_SAMPLES; n += 4) {
             let angle = (2 * Math.PI * targetF * n) / FS;
-            // Safe wrapped access into linear buffer
             let sample = audioStream[(p0 + n) % TOTAL_SAMPLES];
             real += sample * Math.cos(angle);
             imag -= sample * Math.sin(angle);
@@ -379,23 +340,23 @@
         symbols.push(bestNib);
       }
 
-      // Reconstruct 16 bytes
       let rawBytes = new Uint8Array(16);
-      for (let i = 0; i < 16; i++) {
-        rawBytes[i] = (symbols[i * 2] << 4) | symbols[i * 2 + 1];
+      for (let k = 0; k < 16; k++) {
+        rawBytes[k] = (symbols[k * 2] << 4) | symbols[k * 2 + 1];
       }
 
       let hexStr = Array.from(rawBytes).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');
       log("Decoded 16B: " + hexStr);
 
-      // Verify HMAC-SHA256
       let body = rawBytes.slice(0, 8);
       let receivedMac = rawBytes.slice(8, 16);
-      let computedMac = hmacSha256(SHARED_KEY, body).slice(0, 8);
+      
+      let computedFullMac = await computeHmacSha256(SHARED_KEY, body);
+      let computedMac = computedFullMac.slice(0, 8);
 
       let macMatch = true;
-      for (let i = 0; i < 8; i++) {
-        if (receivedMac[i] !== computedMac[i]) { macMatch = false; break; }
+      for (let k = 0; k < 8; k++) {
+        if (receivedMac[k] !== computedMac[k]) { macMatch = false; break; }
       }
 
       if (!macMatch) {
@@ -404,7 +365,6 @@
         return;
       }
 
-      // Unpack Body
       let targetId = body[0];
       let sourceId = body[1];
       let counter = (body[2] << 8) | body[3];
@@ -436,4 +396,11 @@
       unpackR8(r2, "r2_hex", null, "r2_nib");
       unpackR8(r3, "r3_hex", null, "r3_nib");
 
-      document.getElementById("token
+      document.getElementById("tokenBox").style.display = "block";
+      log(`[★] DISPATCH PASS UNLOCKED! CTR=${counter}`);
+
+      setTimeout(() => { state = "ARMED"; }, 3000);
+    }
+  </script>
+</body>
+</html>
