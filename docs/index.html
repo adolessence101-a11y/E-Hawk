@@ -24,13 +24,13 @@
       background: #161b22;
       border: 1px solid #30363d;
       border-radius: 16px;
-      padding: 20px;
+      padding: 24px;
       width: 100%;
       max-width: 420px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
     h1 { font-size: 1.3rem; color: #58a6ff; margin: 0 0 4px 0; }
-    p { font-size: 0.8rem; color: #8b949e; margin: 0 0 14px 0; }
+    p { font-size: 0.82rem; color: #8b949e; margin: 0 0 16px 0; }
     .badge {
       display: inline-block;
       padding: 6px 14px;
@@ -55,6 +55,16 @@
       touch-action: manipulation;
     }
     .btn:active { background: #2ea043; }
+    .meter-container {
+      width: 100%;
+      height: 8px;
+      background: #0d1117;
+      border-radius: 4px;
+      margin: 14px 0;
+      overflow: hidden;
+      border: 1px solid #30363d;
+    }
+    .meter-bar { height: 100%; width: 0%; background: #3fb950; transition: width 0.05s ease-out; }
     .token-display {
       display: none;
       margin-top: 16px;
@@ -101,19 +111,24 @@
     <div id="badge" class="badge badge-idle">OFFLINE (TAP TO ARM)</div>
     <button id="mainBtn" class="btn" onclick="startReceiver()">ARM ACOUSTIC RECEIVER</button>
 
+    <div class="meter-container">
+      <div id="meterBar" class="meter-bar"></div>
+    </div>
+
     <div id="tokenBox" class="token-display">
       <h3>✓ GATE CLEARANCE TOKEN ISSUED</h3>
-      <div id="actionBanner" class="action-banner">--</div>
-      <div><b>Decoded Payload:</b> <span id="outPayload" style="color:#3fb950; font-weight:bold;">--</span></div>
+      <div id="actionBanner" class="action-banner">OVERRIDE: REROUTE TO BAY 4</div>
+      <div><b>Decoded Directive:</b> <span id="outPayload" style="color:#3fb950; font-weight:bold;">--</span></div>
       <div><b>Target Lane:</b> <span style="color:#f0883e; font-weight:bold;">REEFER QUARANTINE BAY 4</span></div>
       <div><b>Physical Integrity:</b> <span style="color:#3fb950;">REED-SOLOMON VERIFIED [AIR-GAP OK]</span></div>
     </div>
 
-    <div id="logs" class="log-box">Status: Ready. Waiting to arm mic.</div>
+    <div id="logs" class="log-box">Status: Ready. Tap button to arm mic.</div>
   </div>
 
   <script>
-    let ggwaveInstance = null;
+    let ggwave = null;
+    let ggInstance = null;
     let audioCtx = null;
     let micStream = null;
     let isLive = false;
@@ -126,29 +141,48 @@
       }
     }
 
+    function convertTypedArray(src, type) {
+      const buffer = new ArrayBuffer(src.byteLength);
+      new src.constructor(buffer).set(src);
+      return new type(buffer);
+    }
+
     async function startReceiver() {
       if (isLive) return;
-      log("Loading ggwave Wasm engine...");
+      log("Initializing ggwave Wasm runtime...");
 
       try {
-        // Initialize ggwave WebAssembly core
         ggwave_factory().then(async (factory) => {
-          ggwaveInstance = factory;
-          log("✓ Wasm modem engine compiled.");
+          ggwave = factory;
 
           const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          audioCtx = new AudioContextClass({ sampleRate: 48000 });
+          audioCtx = new AudioContextClass();
           await audioCtx.resume();
+
+          // Initialize ggwave instance using actual audio hardware sample rate
+          const parameters = ggwave.getDefaultParameters();
+          parameters.sampleRateInp = audioCtx.sampleRate;
+          parameters.sampleRateOut = audioCtx.sampleRate;
+          ggInstance = ggwave.init(parameters);
+
+          log(`✓ Wasm initialized (${audioCtx.sampleRate} Hz)`);
 
           micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const source = audioCtx.createMediaStreamSource(micStream);
-          const recorder = audioCtx.createScriptProcessor(1024, 1, 1);
+          const recorder = audioCtx.createScriptProcessor(2048, 1, 1);
 
           recorder.onaudioprocess = function (e) {
             const input = e.inputBuffer.getChannelData(0);
-            
-            // Pass audio buffer directly to Wasm demodulator
-            const res = ggwaveInstance.decode(input);
+
+            // VU meter
+            let sum = 0;
+            for (let i = 0; i < input.length; i += 8) sum += Math.abs(input[i]);
+            let amp = (sum / (input.length / 8)) * 100;
+            const bar = document.getElementById("meterBar");
+            if (bar) bar.style.width = Math.min(100, amp * 5) + "%";
+
+            // Pass Int8 converted audio to Wasm decode
+            const res = ggwave.decode(ggInstance, convertTypedArray(new Float32Array(input), Int8Array));
             if (res && res.length > 0) {
               const text = new TextDecoder("utf-8").decode(res);
               log("★ DECODED: " + text);
@@ -162,12 +196,12 @@
           isLive = true;
           document.getElementById("mainBtn").style.display = "none";
           document.getElementById("badge").className = "badge badge-live";
-          document.getElementById("badge").innerText = "LISTENING OVER AIR (48 kHz)";
-          log("✓ Microphone online. Ready for chirp.");
+          document.getElementById("badge").innerText = `LISTENING (${audioCtx.sampleRate} Hz)`;
+          log("✓ Microphone online. Ready for data transmission.");
         });
 
       } catch (err) {
-        log("❌ Initialization error: " + err.message);
+        log("❌ Error: " + err.message);
       }
     }
 
@@ -175,7 +209,6 @@
       document.getElementById("badge").className = "badge badge-ok";
       document.getElementById("badge").innerText = "PASS AUTHENTICATED & VERIFIED";
       document.getElementById("outPayload").innerText = text;
-      document.getElementById("actionBanner").innerText = "OVERRIDE: REROUTE TO BAY 4";
       document.getElementById("tokenBox").style.display = "block";
     }
   </script>
