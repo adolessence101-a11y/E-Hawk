@@ -265,13 +265,15 @@
     async function initAudio() {
       if (isLive) return;
       try {
+        log("Arming audio engine...");
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContext({ sampleRate: 48000 });
+        
+        // 1. Let iOS choose its native hardware sample rate (bypasses 48kHz lock)
+        audioCtx = new AudioContext();
         await audioCtx.resume();
 
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-        });
+        // 2. Use simple audio constraint (bypasses OverconstrainedError)
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
         const source = audioCtx.createMediaStreamSource(micStream);
         const scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
@@ -279,13 +281,11 @@
         scriptNode.onaudioprocess = (e) => {
           const input = e.inputBuffer.getChannelData(0);
           
-          // VU Meter calculation
           let sum = 0;
           for (let i = 0; i < input.length; i += 8) sum += Math.abs(input[i]);
           let amp = (sum / (input.length / 8)) * 100;
           document.getElementById("meterBar").style.width = Math.min(100, amp * 5) + "%";
 
-          // Linear append to avoid ring overwrites
           for (let i = 0; i < input.length; i++) {
             audioStream[writeIdx] = input[i];
             writeIdx = (writeIdx + 1) % TOTAL_SAMPLES;
@@ -303,10 +303,11 @@
         state = "ARMED";
         document.getElementById("mainBtn").style.display = "none";
         document.getElementById("badge").className = "badge badge-live";
-        document.getElementById("badge").innerText = "LISTENING OVER AIR (48 kHz)";
-        log("✓ Mic active. Listening for 5-7.4 kHz chirp...");
+        document.getElementById("badge").innerText = `LISTENING (${audioCtx.sampleRate} Hz)`;
+        log(`✓ Mic active at ${audioCtx.sampleRate} Hz. Ready for chirp.`);
       } catch (err) {
-        log("❌ Mic error: " + err.message);
+        log("❌ Mic error: " + err.name + " - " + err.message);
+        document.getElementById("badge").innerText = "ARMING FAILED";
       }
     }
 
